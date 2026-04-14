@@ -38,15 +38,17 @@
             display: none; /* replaced by logo image */
         }
         .logo-img {
-            height: 32px;
+            height: 28px;
             width: auto;
+            max-width: 100px;
             margin-bottom: 8px;
             background: #141413;
-            padding: 8px 14px;
+            padding: 6px 10px;
             border-radius: 6px;
             display: block;
             margin-left: auto;
             margin-right: auto;
+            object-fit: contain;
         }
         .subtitle {
             font-size: 15px;
@@ -231,8 +233,8 @@
         .btn-exit {
             padding: 8px 16px;
             border-radius: 8px;
-            border: 1px solid #555;
-            background: transparent;
+            border: 1px solid #666;
+            background: #30302E;
             color: #fff;
             font-size: 13px;
             font-weight: 500;
@@ -240,7 +242,7 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        .btn-exit:hover { background: #30302E; }
+        .btn-exit:hover { background: #444; }
 
         /* Chat area */
         .chat-area {
@@ -609,18 +611,13 @@
 <!-- ==================== LOGIN SCREEN ==================== -->
 <div id="login-screen" class="screen">
     <div class="login-container">
-        <img src="dhd-logo.png" alt="DHD" class="logo-img" style="max-height:32px;max-width:120px;">
+        <img src="dhd-logo.png" alt="DHD" class="logo-img">
         <div class="subtitle">Q2 Process Check-In</div>
 
         <!-- Welcome explanation -->
-        <div style="background:#FAFAFA;border:1px solid #e0e0e0;border-radius:12px;padding:20px;margin-bottom:28px;font-size:14px;line-height:1.65;color:#333;">
-            <strong style="color:#141413;">Why we're doing this</strong><br>
-            We want to build better tools and remove unnecessary friction from your day-to-day work. But we can't fix what we don't understand — and the people who understand it best are the ones living it every day. That's you.<br><br>
-            <strong style="color:#141413;">What this is</strong><br>
-            A private, one-on-one conversation with an AI interviewer about how you actually do your job — the tools you use, the processes you follow, what works, what doesn't, and where time gets wasted. It's designed to feel like a comfortable chat, not a survey.<br><br>
-            <strong style="color:#141413;">How it works</strong><br>
-            The session runs about two hours, but you can start and stop whenever you want — your progress is saved automatically, and you pick up right where you left off.<br><br>
-            <strong style="color:#141413;">Your answers are completely private.</strong> No one at DHD — including leadership — can see what you say. Only anonymized patterns and themes will be shared. The goal is simple: figure out where we can take work off your plate and build tools that actually help.
+        <div style="background:#FAFAFA;border:1px solid #e0e0e0;border-radius:12px;padding:16px;margin-bottom:24px;font-size:13px;line-height:1.55;color:#444;">
+            A private conversation about how you do your job — what works, what doesn't, and where time gets wasted. Start and stop anytime; your progress saves automatically.<br><br>
+            <strong style="color:#141413;">Your answers are completely private.</strong> No one at DHD can see what you say. Only anonymized themes will be shared.
         </div>
 
         <div id="login-error" class="error-msg"></div>
@@ -835,7 +832,7 @@ Marissa, marissa@dhdchicago.com"></textarea>
 // ============================================================
 const JSONBIN_BASE = 'https://api.jsonbin.io/v3';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 let config = null;   // { jsonbinKey, anthropicKey, masterBinId }
 let currentUser = null; // { name, email, role, binId, ... }
@@ -1442,6 +1439,7 @@ async function sendMessage() {
 
     } catch (err) {
         removeTypingIndicator(typingEl);
+        console.error('Claude API error:', err);
         appendMessage('assistant', 'I had a brief connection issue. Could you try sending that again?');
     } finally {
         isSending = false;
