@@ -38,17 +38,18 @@
             display: none; /* replaced by logo image */
         }
         .logo-img {
-            height: 28px;
+            height: 36px;
             width: auto;
-            max-width: 100px;
-            margin-bottom: 8px;
+            max-width: 120px;
+            margin-bottom: 12px;
             background: #141413;
-            padding: 6px 10px;
-            border-radius: 6px;
+            padding: 8px 14px;
+            border-radius: 8px;
             display: block;
             margin-left: auto;
             margin-right: auto;
             object-fit: contain;
+            overflow: hidden;
         }
         .subtitle {
             font-size: 15px;
@@ -233,8 +234,8 @@
         .btn-exit {
             padding: 8px 16px;
             border-radius: 8px;
-            border: 1px solid #666;
-            background: #30302E;
+            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.12);
             color: #fff;
             font-size: 13px;
             font-weight: 500;
@@ -242,7 +243,7 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        .btn-exit:hover { background: #444; }
+        .btn-exit:hover { background: rgba(255,255,255,0.22); }
 
         /* Chat area */
         .chat-area {
@@ -615,9 +616,9 @@
         <div class="subtitle">Q2 Process Check-In</div>
 
         <!-- Welcome explanation -->
-        <div style="background:#FAFAFA;border:1px solid #e0e0e0;border-radius:12px;padding:16px;margin-bottom:24px;font-size:13px;line-height:1.55;color:#444;">
-            A private conversation about how you do your job — what works, what doesn't, and where time gets wasted. Start and stop anytime; your progress saves automatically.<br><br>
-            <strong style="color:#141413;">Your answers are completely private.</strong> No one at DHD can see what you say. Only anonymized themes will be shared.
+        <div style="background:#FAFAFA;border:1px solid #e0e0e0;border-radius:12px;padding:14px 16px;margin-bottom:20px;font-size:13px;line-height:1.5;color:#444;">
+            A private conversation about your work — start and stop anytime, progress saves automatically.
+            <strong style="color:#141413;">Your answers are completely private.</strong>
         </div>
 
         <div id="login-error" class="error-msg"></div>
@@ -1386,7 +1387,7 @@ async function sendClaudeOpener() {
 
     } catch (err) {
         removeTypingIndicator(typingEl);
-        appendMessage('assistant', 'I had a connection issue. Please try refreshing the page. Error: ' + err.message);
+        appendMessage('assistant', 'I had a connection issue starting up. Please refresh the page to try again.');
     } finally {
         isSending = false;
         disableInput(false);
@@ -1440,7 +1441,7 @@ async function sendMessage() {
     } catch (err) {
         removeTypingIndicator(typingEl);
         console.error('Claude API error:', err);
-        appendMessage('assistant', 'I had a brief connection issue. Could you try sending that again?');
+        appendMessage('assistant', 'Sorry, I had a connection issue — please try again in a moment. (If this keeps happening, check your internet connection.)');
     } finally {
         isSending = false;
         disableInput(false);
