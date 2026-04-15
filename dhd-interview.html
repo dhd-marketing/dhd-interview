@@ -914,6 +914,7 @@ function autoGrow(el) {
             speakerOn = false;
             document.getElementById('speaker-toggle').classList.remove('active');
             if (window.speechSynthesis) window.speechSynthesis.cancel();
+            if (_currentAudio) { _currentAudio.pause(); _currentAudio = null; }
         }
     }
 }
@@ -964,15 +965,35 @@ function fetchWithTimeout(url, options, timeoutMs) {
 }
 
 async function jsonbinRead(binId, skipCache) {
+    // 1. Check in-memory cache (30s TTL)
     if (!skipCache && _binCache[binId] && (Date.now() - _binCache[binId].ts < 30000)) {
         return JSON.parse(JSON.stringify(_binCache[binId].data));
     }
+    // 2. Check localStorage cache (5 min TTL) — survives page reloads
+    if (!skipCache) {
+        try {
+            var lsKey = 'jb_' + binId;
+            var stored = localStorage.getItem(lsKey);
+            if (stored) {
+                var parsed = JSON.parse(stored);
+                if (Date.now() - parsed.ts < 300000) { // 5 minutes
+                    _binCache[binId] = { data: parsed.data, ts: parsed.ts };
+                    return JSON.parse(JSON.stringify(parsed.data));
+                }
+            }
+        } catch(e) { /* localStorage unavailable, continue to fetch */ }
+    }
+    // 3. Fetch from JSONBin
     const res = await fetchWithTimeout(`${JSONBIN_BASE}/b/${binId}/latest`, {
         headers: { 'X-Master-Key': config.jsonbinKey }
     }, 12000);
     if (!res.ok) throw new Error('JSONBin read failed: ' + res.status);
     const data = await res.json();
     _binCache[binId] = { data: data.record, ts: Date.now() };
+    // Persist to localStorage for fast reload
+    try {
+        localStorage.setItem('jb_' + binId, JSON.stringify({ data: data.record, ts: Date.now() }));
+    } catch(e) { /* quota exceeded, ignore */ }
     return data.record;
 }
 
@@ -1813,6 +1834,7 @@ function toggleVoice() {
             speakerOn = false;
             document.getElementById('speaker-toggle').classList.remove('active');
             if (window.speechSynthesis) window.speechSynthesis.cancel();
+            if (_currentAudio) { _currentAudio.pause(); _currentAudio = null; }
         }
     }
 }
@@ -1870,11 +1892,79 @@ function findBestVoice() {
     return voices.find(v => v.lang.startsWith('en')) || null;
 }
 
+let _currentAudio = null; // track playing audio for cancellation
+
 function speakText(text) {
+    // Cancel any currently playing audio
+    if (_currentAudio) {
+        _currentAudio.pause();
+        _currentAudio = null;
+    }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+    // Try OpenAI TTS first (natural voice), fall back to browser voice
+    if (config.openaiKey && text.length >= 20) {
+        speakWithOpenAI(text);
+    } else {
+        speakWithBrowser(text);
+    }
+}
+
+async function speakWithOpenAI(text) {
+    try {
+        const response = await fetch('https://api.openai.com/v1/audio/speech', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + config.openaiKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'tts-1',
+                voice: 'nova',
+                input: text,
+                speed: 1.0
+            })
+        });
+
+        if (!response.ok) {
+            console.error('OpenAI TTS failed:', response.status);
+            speakWithBrowser(text); // fallback
+            return;
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        _currentAudio = audio;
+
+        audio.onended = function() {
+            URL.revokeObjectURL(url);
+            _currentAudio = null;
+            // Resume listening after speech finishes
+            if (voiceMode && !isSending && recognition) {
+                recognition._resetFinal();
+                document.getElementById('voice-transcript').textContent = 'Listening... (speak anytime)';
+                try { recognition.start(); } catch(e) {}
+            }
+        };
+        audio.onerror = function() {
+            URL.revokeObjectURL(url);
+            _currentAudio = null;
+            speakWithBrowser(text); // fallback on playback error
+        };
+
+        audio.play();
+
+    } catch(e) {
+        console.error('OpenAI TTS error:', e);
+        speakWithBrowser(text); // fallback
+    }
+}
+
+function speakWithBrowser(text) {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
 
-    // Split into sentences for more natural pacing and to avoid Chrome's long-utterance bug
     const sentences = text.match(/[^.!?]+[.!?]+[\s]*/g) || [text];
     const queue = sentences.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
@@ -1882,7 +1972,6 @@ function speakText(text) {
 
     function speakNext(index) {
         if (index >= queue.length) {
-            // All sentences done — restart listening if in voice mode
             if (voiceMode && !isSending && recognition) {
                 recognition._resetFinal();
                 document.getElementById('voice-transcript').textContent = 'Listening... (speak anytime)';
@@ -1890,26 +1979,17 @@ function speakText(text) {
             }
             return;
         }
-
         const utterance = new SpeechSynthesisUtterance(queue[index]);
         if (bestVoice) utterance.voice = bestVoice;
-
-        // Tuned for warm, conversational Samantha
-        utterance.rate = 0.95;    // Slightly slower — more natural, less rushed
-        utterance.pitch = 1.05;   // Tiny pitch lift — warmer tone
+        utterance.rate = 0.95;
+        utterance.pitch = 1.05;
         utterance.volume = 1.0;
-
         utterance.onend = function() { speakNext(index + 1); };
         utterance.onerror = function() { speakNext(index + 1); };
-
         window.speechSynthesis.speak(utterance);
     }
-
     speakNext(0);
-    return; // skip old utterance code below
 }
-
-// (Legacy speakText code removed — sentence-by-sentence approach above handles everything)
 
 // Load voices (they load async in some browsers)
 if (window.speechSynthesis) {
@@ -2181,6 +2261,7 @@ function saveAndExit() {
     // Stop voice immediately
     if (voiceMode) toggleVoice();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (_currentAudio) { _currentAudio.pause(); _currentAudio = null; }
 
     // Save in background — don't block the UI
     if (interviewData && currentUser) {
@@ -2205,8 +2286,19 @@ async function init() {
     config = {
         jsonbinKey: '$2a$10$W.3EebzWiwLocJPNCgMCVe2w2W2zVvvNWNZrxu5GzL81rxRjjFdYm',
         anthropicKey: null, // loaded from JSONBin master bin
+        openaiKey: null,    // loaded from JSONBin master bin (for TTS)
         masterBinId: '69de08dc856a68218930dedd'
     };
+
+    // Try to restore API keys from localStorage immediately (instant for returning users)
+    try {
+        var savedConfig = localStorage.getItem('dhd_config');
+        if (savedConfig) {
+            var parsed = JSON.parse(savedConfig);
+            if (parsed.anthropicKey) config.anthropicKey = parsed.anthropicKey;
+            if (parsed.openaiKey) config.openaiKey = parsed.openaiKey;
+        }
+    } catch(e) {}
 
     // Show login screen IMMEDIATELY — don't make users wait for API key fetch
     showScreen('login-screen');
@@ -2227,8 +2319,12 @@ async function loadApiKey(retryCount) {
         const master = await jsonbinRead(config.masterBinId, true);
         if (master.anthropicKey) {
             config.anthropicKey = master.anthropicKey;
-            localStorage.setItem('dhd_config', JSON.stringify(config));
-        } else {
+        }
+        if (master.openaiKey) {
+            config.openaiKey = master.openaiKey;
+        }
+        localStorage.setItem('dhd_config', JSON.stringify(config));
+        if (!master.anthropicKey) {
             throw new Error('anthropicKey not found in master bin');
         }
     } catch (err) {
