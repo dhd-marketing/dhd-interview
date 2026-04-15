@@ -944,13 +944,32 @@ async function jsonbinCreate(data, binName) {
 }
 
 const _binCache = {};
+function fetchWithTimeout(url, options, timeoutMs) {
+    timeoutMs = timeoutMs || 10000;
+    return new Promise(function(resolve, reject) {
+        const controller = new AbortController();
+        const timer = setTimeout(function() {
+            controller.abort();
+            reject(new Error('Request timed out after ' + (timeoutMs / 1000) + 's'));
+        }, timeoutMs);
+        options.signal = controller.signal;
+        fetch(url, options).then(function(res) {
+            clearTimeout(timer);
+            resolve(res);
+        }).catch(function(err) {
+            clearTimeout(timer);
+            reject(err);
+        });
+    });
+}
+
 async function jsonbinRead(binId, skipCache) {
     if (!skipCache && _binCache[binId] && (Date.now() - _binCache[binId].ts < 30000)) {
         return JSON.parse(JSON.stringify(_binCache[binId].data));
     }
-    const res = await fetch(`${JSONBIN_BASE}/b/${binId}/latest`, {
+    const res = await fetchWithTimeout(`${JSONBIN_BASE}/b/${binId}/latest`, {
         headers: { 'X-Master-Key': config.jsonbinKey }
-    });
+    }, 12000);
     if (!res.ok) throw new Error('JSONBin read failed: ' + res.status);
     const data = await res.json();
     _binCache[binId] = { data: data.record, ts: Date.now() };
@@ -1054,9 +1073,15 @@ async function doLogin() {
     btn.textContent = 'Signing in...';
 
     try {
-        // Hash password + fetch master bin + pre-fetch user bin ALL in parallel
+        // Hash password + fetch master bin (use cache if available, fresh if not)
         const passHash = await sha256(pass);
-        const master = await jsonbinRead(config.masterBinId, true); // skip cache for fresh data
+        let master;
+        try {
+            master = await jsonbinRead(config.masterBinId, false); // use cache first for speed
+        } catch(e) {
+            // Cache miss or expired — try fresh fetch
+            master = await jsonbinRead(config.masterBinId, true);
+        }
         const user = master.users[email];
 
         if (!user) {
@@ -1092,7 +1117,10 @@ async function doLogin() {
         }
 
     } catch (err) {
-        showError('login-error', 'Login failed: ' + err.message);
+        const msg = err.message.includes('timed out')
+            ? 'Connection is slow — please try again.'
+            : 'Login failed: ' + err.message;
+        showError('login-error', msg);
     } finally {
         btn.disabled = false;
         btn.textContent = 'Sign In';
