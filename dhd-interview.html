@@ -628,8 +628,10 @@
 
         <!-- Welcome explanation -->
         <div style="background:#FAFAFA;border:1px solid #e0e0e0;border-radius:12px;padding:14px 16px;margin-bottom:20px;font-size:13px;line-height:1.5;color:#444;">
-            A private conversation about your work — start and stop anytime, progress saves automatically.
-            <strong style="color:#141413;">Your answers are completely private.</strong>
+            This is a private, one-on-one conversation about how work is going at DHD — what's working, what's getting in the way, and where things could be better. There are no right or wrong answers.
+            <br><br>
+            The conversation takes about 30–45 minutes, but you can <strong style="color:#141413;">start and stop anytime</strong> — your progress saves automatically and you'll pick up right where you left off.
+            <strong style="color:#141413;">Your answers are completely private</strong> and will never be shared with your name attached.
         </div>
 
         <div id="login-error" class="error-msg"></div>
@@ -1490,6 +1492,18 @@ async function sendMessage() {
 }
 
 async function callClaude(messages) {
+    // Guard: make sure API key is loaded before calling Claude
+    if (!config.anthropicKey) {
+        // Try one more time to load it
+        try {
+            const master = await jsonbinRead(config.masterBinId, true);
+            if (master.anthropicKey) config.anthropicKey = master.anthropicKey;
+        } catch(e) { /* fall through to error */ }
+        if (!config.anthropicKey) {
+            throw new Error('Still connecting — please wait a moment and try again.');
+        }
+    }
+
     // Abort any previous in-flight request
     if (currentAbortController) { try { currentAbortController.abort(); } catch(e) {} }
     currentAbortController = new AbortController();
@@ -2161,17 +2175,7 @@ async function init() {
         masterBinId: '69de08dc856a68218930dedd'
     };
 
-    // Fetch the API key from the master bin (stored alongside user accounts)
-    try {
-        const master = await jsonbinRead(config.masterBinId, true);
-        if (master.anthropicKey) {
-            config.anthropicKey = master.anthropicKey;
-        }
-    } catch (err) {
-        console.error('Failed to load API key from JSONBin:', err);
-    }
-
-    localStorage.setItem('dhd_config', JSON.stringify(config));
+    // Show login screen IMMEDIATELY — don't make users wait for API key fetch
     showScreen('login-screen');
     document.getElementById('login-pass').addEventListener('keydown', e => {
         if (e.key === 'Enter') doLogin();
@@ -2179,6 +2183,28 @@ async function init() {
     document.getElementById('reg-pass-confirm').addEventListener('keydown', e => {
         if (e.key === 'Enter') doRegister();
     });
+
+    // Fetch the API key in the background (with retry)
+    loadApiKey();
+}
+
+async function loadApiKey(retryCount) {
+    retryCount = retryCount || 0;
+    try {
+        const master = await jsonbinRead(config.masterBinId, true);
+        if (master.anthropicKey) {
+            config.anthropicKey = master.anthropicKey;
+            localStorage.setItem('dhd_config', JSON.stringify(config));
+        } else {
+            throw new Error('anthropicKey not found in master bin');
+        }
+    } catch (err) {
+        console.error('Failed to load API key (attempt ' + (retryCount + 1) + '):', err);
+        if (retryCount < 2) {
+            // Retry after a short delay (1s, then 2s)
+            setTimeout(function() { loadApiKey(retryCount + 1); }, (retryCount + 1) * 1000);
+        }
+    }
 }
 
 init();
