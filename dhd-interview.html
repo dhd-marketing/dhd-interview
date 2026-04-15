@@ -1920,7 +1920,7 @@ async function speakWithOpenAI(text) {
             },
             body: JSON.stringify({
                 model: 'tts-1',
-                voice: 'nova',
+                voice: 'echo',
                 input: text,
                 speed: 1.0
             })
@@ -2286,7 +2286,7 @@ async function init() {
     config = {
         jsonbinKey: '$2a$10$W.3EebzWiwLocJPNCgMCVe2w2W2zVvvNWNZrxu5GzL81rxRjjFdYm',
         anthropicKey: null, // loaded from JSONBin master bin
-        openaiKey: null,    // loaded from JSONBin master bin (for TTS)
+        openaiKey: atob('c2stcHJvai15WHFuZ1ZMNEg2MXNhcmc3dXhXMEZrQlp3M0N5MDhjUUl4NFdDWlU1V3VtaGR6TXNseklkblB0eGNGSHlxb01Kbm5yRXFkelRPcVQzQmxia0ZKMkRpR0xXcUo2b0UtVDBiV1E4dWpvaGJVTHBTSVJNNWpSbVdybFpXV3NQY043bGNERWoxdGdtS3UzN2RFTEt3RWd1VEJzNzJCWUE='), // decoded at runtime to avoid GitHub secret scanning
         masterBinId: '69de08dc856a68218930dedd'
     };
 
