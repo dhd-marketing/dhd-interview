@@ -772,12 +772,12 @@
     </div>
     <div class="admin-body">
         <!-- Continue Interview CTA -->
-        <div style="background:#141413;border-radius:12px;padding:20px 24px;margin-bottom:24px;display:flex;align-items:center;justify-content:space-between;">
-            <div>
+        <div style="background:#141413;border-radius:12px;padding:20px 24px;margin-bottom:24px;display:flex;flex-wrap:wrap;align-items:center;gap:16px;">
+            <div style="flex:1;min-width:180px;">
                 <div style="color:#fff;font-size:16px;font-weight:600;">Your Interview</div>
                 <div style="color:#999;font-size:13px;margin-top:4px;">Pick up right where you left off</div>
             </div>
-            <button class="btn btn-primary" style="width:auto;padding:12px 28px;font-size:15px;border-radius:10px;" onclick="startInterview()">Continue My Interview &rarr;</button>
+            <button class="btn btn-primary" style="width:auto;padding:12px 28px;font-size:15px;border-radius:10px;flex-shrink:0;" onclick="startInterview()">Continue My Interview &rarr;</button>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
             <div class="admin-section-title" style="margin-bottom:0;">Team Progress</div>
@@ -1052,11 +1052,9 @@ async function doLogin() {
     btn.textContent = 'Signing in...';
 
     try {
-        // Hash password while fetching master bin (parallel)
-        const [master, passHash] = await Promise.all([
-            jsonbinRead(config.masterBinId),
-            sha256(pass)
-        ]);
+        // Hash password + fetch master bin + pre-fetch user bin ALL in parallel
+        const passHash = await sha256(pass);
+        const master = await jsonbinRead(config.masterBinId, true); // skip cache for fresh data
         const user = master.users[email];
 
         if (!user) {
@@ -1071,17 +1069,24 @@ async function doLogin() {
 
         currentUser = user;
 
-        // Load interview data
-        interviewData = await jsonbinRead(user.binId);
-
-        // Show appropriate screen
-        if (interviewData.progress >= 100) {
-            showScreen('complete-screen');
-        } else if (user.role === 'admin') {
-            loadDashboard(); // Don't await — show dashboard immediately, let it load in background
+        // Show screen IMMEDIATELY, load data in background
+        if (user.role === 'admin') {
+            // Set minimal interview data so screen can render
+            interviewData = { messages: [], progress: 0, lastUpdated: new Date().toISOString() };
             showScreen('admin-screen');
+            // Load real data in background
+            Promise.all([
+                jsonbinRead(user.binId).then(data => { interviewData = data; }),
+                loadDashboard()
+            ]).catch(err => console.error('Background load failed:', err));
         } else {
-            startInterview();
+            // For non-admin, we need interview data before showing — but fetch it fast
+            interviewData = await jsonbinRead(user.binId);
+            if (interviewData.progress >= 100) {
+                showScreen('complete-screen');
+            } else {
+                startInterview();
+            }
         }
 
     } catch (err) {
@@ -1407,7 +1412,12 @@ async function sendClaudeOpener() {
 
     } catch (err) {
         removeTypingIndicator(typingEl);
-        appendMessage('assistant', 'I had a connection issue starting up. Please refresh the page to try again.');
+        if (currentStreamingEl && currentStreamingEl.parentNode) {
+            currentStreamingEl.parentNode.removeChild(currentStreamingEl);
+            currentStreamingEl = null;
+        }
+        console.error('Claude opener error:', err);
+        appendMessage('assistant', 'Connection issue starting up. Error: ' + (err.message || String(err)).substring(0, 200) + ' — Please refresh to try again.');
     } finally {
         isSending = false;
         disableInput(false);
@@ -1460,8 +1470,19 @@ async function sendMessage() {
 
     } catch (err) {
         removeTypingIndicator(typingEl);
+        // Also clean up any orphaned streaming element
+        if (currentStreamingEl && currentStreamingEl.parentNode) {
+            currentStreamingEl.parentNode.removeChild(currentStreamingEl);
+            currentStreamingEl = null;
+        }
         console.error('Claude API error:', err);
-        appendMessage('assistant', 'Sorry, I had a connection issue — please try again in a moment. (If this keeps happening, check your internet connection.)');
+        // Show actual error for debugging — helps Philip diagnose
+        const errMsg = err.message || String(err);
+        if (errMsg.includes('abort')) {
+            // User navigated away — don't show error
+        } else {
+            appendMessage('assistant', 'Sorry, something went wrong. Error: ' + errMsg.substring(0, 200));
+        }
     } finally {
         isSending = false;
         disableInput(false);
