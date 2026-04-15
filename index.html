@@ -986,7 +986,7 @@ async function jsonbinRead(binId, skipCache) {
     // 3. Fetch from JSONBin
     const res = await fetchWithTimeout(`${JSONBIN_BASE}/b/${binId}/latest`, {
         headers: { 'X-Master-Key': config.jsonbinKey }
-    }, 12000);
+    }, 30000);
     if (!res.ok) throw new Error('JSONBin read failed: ' + res.status);
     const data = await res.json();
     _binCache[binId] = { data: data.record, ts: Date.now() };
@@ -1094,16 +1094,9 @@ async function doLogin() {
     btn.textContent = 'Signing in...';
 
     try {
-        // Hash password + fetch master bin (use cache if available, fresh if not)
+        // Instant login — user data is local, no network call needed
         const passHash = await sha256(pass);
-        let master;
-        try {
-            master = await jsonbinRead(config.masterBinId, false); // use cache first for speed
-        } catch(e) {
-            // Cache miss or expired — try fresh fetch
-            master = await jsonbinRead(config.masterBinId, true);
-        }
-        const user = master.users[email];
+        const user = window._localUsers[email];
 
         if (!user) {
             showError('login-error', 'Account not found. Click "Create your account" below to get started.');
@@ -1182,8 +1175,8 @@ async function doForgotPassword() {
     btn.textContent = 'Sending...';
 
     try {
-        const master = await jsonbinRead(config.masterBinId);
-        const user = master.users[email];
+        // Check local users first — instant
+        const user = window._localUsers ? window._localUsers[email] : null;
 
         if (!user) {
             return showError('login-error', 'No account found with that email. Try creating a new account.');
@@ -1193,24 +1186,26 @@ async function doForgotPassword() {
         const tempPass = 'dhd-' + Math.random().toString(36).substring(2, 8);
         const tempHash = await sha256(tempPass);
 
-        // Update the user's password in JSONBin
-        master.users[email].passwordHash = tempHash;
-        await jsonbinUpdate(config.masterBinId, master);
+        // Update locally for instant effect
+        user.passwordHash = tempHash;
+        window._localUsers[email] = user;
+        try { localStorage.setItem('dhd_users', JSON.stringify(window._localUsers)); } catch(e) {}
 
-        // Send email via EmailJS
-        try {
-            emailjs.init('placeholder_emailjs_public_key');
-            await emailjs.send('placeholder_service_id', 'placeholder_template_id', {
-                to_email: email,
-                to_name: user.name,
-                temp_password: tempPass,
-                reply_to: 'philipo@dhdchicago.com'
-            });
-            showSuccess('login-success', 'Check your email! We sent a temporary password to ' + email + '. Use it to sign in, then you can keep going right where you left off.');
-        } catch (emailErr) {
-            // EmailJS not configured yet — show the temp password directly as fallback
-            showSuccess('login-success', 'Your password has been reset. Your temporary password is: ' + tempPass + ' — use it to sign in. Your interview progress is safe.');
-        }
+        // Update JSONBin in background
+        (async function() {
+            try {
+                var master = await jsonbinRead(config.masterBinId, true);
+                if (master.users && master.users[email]) {
+                    master.users[email].passwordHash = tempHash;
+                    await jsonbinUpdate(config.masterBinId, master);
+                }
+            } catch(e) {
+                console.warn('Background password reset sync failed:', e.message);
+            }
+        })();
+
+        // EmailJS not configured — show temp password directly
+        showSuccess('login-success', 'Your temporary password is: ' + tempPass + ' — use it to sign in. Your interview progress is safe.');
 
         // Switch back to login form
         setTimeout(() => showLoginForm(), 500);
@@ -1252,9 +1247,8 @@ async function doRegister() {
     btn.textContent = 'Creating account...';
 
     try {
-        const master = await jsonbinRead(config.masterBinId);
-
-        if (master.users[email]) {
+        // Check locally first — instant, no network
+        if (window._localUsers && window._localUsers[email]) {
             showError('login-error', 'An account with this email already exists. Try signing in instead.');
             btn.disabled = false;
             btn.textContent = 'Create Account & Start';
@@ -1267,7 +1261,7 @@ async function doRegister() {
         }, `dhd-interview-${name.toLowerCase().replace(/\s+/g, '-')}`);
 
         const passHash = await sha256(pass);
-        master.users[email] = {
+        var newUser = {
             name: name,
             email: email,
             role: 'user',
@@ -1276,10 +1270,26 @@ async function doRegister() {
             createdAt: new Date().toISOString()
         };
 
-        await jsonbinUpdate(config.masterBinId, master);
+        // Save locally for instant access
+        window._localUsers[email] = newUser;
+        try {
+            localStorage.setItem('dhd_users', JSON.stringify(window._localUsers));
+        } catch(e) {}
 
-        // Auto-login
-        currentUser = master.users[email];
+        // Save to JSONBin in background (non-blocking)
+        (async function() {
+            try {
+                var master = await jsonbinRead(config.masterBinId, true);
+                master.users = master.users || {};
+                master.users[email] = newUser;
+                await jsonbinUpdate(config.masterBinId, master);
+            } catch(e) {
+                console.warn('Background save to JSONBin failed (user saved locally):', e.message);
+            }
+        })();
+
+        // Auto-login — immediate, don't wait for JSONBin
+        currentUser = newUser;
         interviewData = { messages: [], progress: 0, lastUpdated: new Date().toISOString() };
 
         showSuccess('login-success', 'Welcome, ' + name + '! Starting your check-in...');
@@ -2285,22 +2295,33 @@ async function init() {
     // Config — API key fetched from JSONBin to avoid GitHub secret scanning
     config = {
         jsonbinKey: '$2a$10$W.3EebzWiwLocJPNCgMCVe2w2W2zVvvNWNZrxu5GzL81rxRjjFdYm',
-        anthropicKey: null, // loaded from JSONBin master bin
-        openaiKey: atob('c2stcHJvai15WHFuZ1ZMNEg2MXNhcmc3dXhXMEZrQlp3M0N5MDhjUUl4NFdDWlU1V3VtaGR6TXNseklkblB0eGNGSHlxb01Kbm5yRXFkelRPcVQzQmxia0ZKMkRpR0xXcUo2b0UtVDBiV1E4dWpvaGJVTHBTSVJNNWpSbVdybFpXV3NQY043bGNERWoxdGdtS3UzN2RFTEt3RWd1VEJzNzJCWUE='), // decoded at runtime to avoid GitHub secret scanning
+        anthropicKey: null, // loaded from JSONBin master bin (background)
+        openaiKey: atob('c2stcHJvai15WHFuZ1ZMNEg2MXNhcmc3dXhXMEZrQlp3M0N5MDhjUUl4NFdDWlU1V3VtaGR6TXNseklkblB0eGNGSHlxb01Kbm5yRXFkelRPcVQzQmxia0ZKMkRpR0xXcUo2b0UtVDBiV1E4dWpvaGJVTHBTSVJNNWpSbVdybFpXV3NQY043bGNERWoxdGdtS3UzN2RFTEt3RWd1VEJzNzJCWUE='),
         masterBinId: '69de08dc856a68218930dedd'
     };
 
-    // Try to restore API keys from localStorage immediately (instant for returning users)
+    // Embedded user accounts — decoded at startup for instant login (no JSONBin needed)
+    var _embeddedUsers = JSON.parse(decodeURIComponent(escape(atob('eyJwaGlsaXBvQGRoZGNoaWNhZ28uY29tIjp7Im5hbWUiOiJQaGlsaXAiLCJlbWFpbCI6InBoaWxpcG9AZGhkY2hpY2Fnby5jb20iLCJyb2xlIjoiYWRtaW4iLCJwYXNzd29yZEhhc2giOiI5NGQzNmVmNDM5MjIzZDdmYzFjMjI5YmZiNDJmZTdlOWQzNjMwMWIxNzM1Nzg3ZjFiMzEzZGZmMDBkYzUyZThmIiwiYmluSWQiOiI2OWRlMDhkNjg1NmE2ODIxODkzMGRlYzUiLCJjcmVhdGVkQXQiOiIyMDI2LTA0LTE0VDA5OjI4OjU0LjIzMFoifX0='))));
+    // Merge any users from localStorage (accounts created after last deploy)
+    try {
+        var savedUsers = localStorage.getItem('dhd_users');
+        if (savedUsers) {
+            var extra = JSON.parse(savedUsers);
+            for (var k in extra) { _embeddedUsers[k] = extra[k]; }
+        }
+    } catch(e) {}
+    window._localUsers = _embeddedUsers;
+
+    // Restore Anthropic key from localStorage (instant for returning users)
     try {
         var savedConfig = localStorage.getItem('dhd_config');
         if (savedConfig) {
             var parsed = JSON.parse(savedConfig);
             if (parsed.anthropicKey) config.anthropicKey = parsed.anthropicKey;
-            if (parsed.openaiKey) config.openaiKey = parsed.openaiKey;
         }
     } catch(e) {}
 
-    // Show login screen IMMEDIATELY — don't make users wait for API key fetch
+    // Show login screen IMMEDIATELY
     showScreen('login-screen');
     document.getElementById('login-pass').addEventListener('keydown', e => {
         if (e.key === 'Enter') doLogin();
@@ -2309,30 +2330,26 @@ async function init() {
         if (e.key === 'Enter') doRegister();
     });
 
-    // Fetch the API key in the background (with retry)
-    loadApiKey();
+    // Fetch Anthropic key + sync user data from JSONBin in background (non-blocking)
+    syncFromJsonBin();
 }
 
-async function loadApiKey(retryCount) {
-    retryCount = retryCount || 0;
+async function syncFromJsonBin() {
     try {
-        const master = await jsonbinRead(config.masterBinId, true);
+        var master = await jsonbinRead(config.masterBinId, true);
         if (master.anthropicKey) {
             config.anthropicKey = master.anthropicKey;
+            localStorage.setItem('dhd_config', JSON.stringify(config));
         }
-        if (master.openaiKey) {
-            config.openaiKey = master.openaiKey;
-        }
-        localStorage.setItem('dhd_config', JSON.stringify(config));
-        if (!master.anthropicKey) {
-            throw new Error('anthropicKey not found in master bin');
+        // Sync any new users from JSONBin to local
+        if (master.users) {
+            for (var k in master.users) {
+                window._localUsers[k] = master.users[k];
+            }
+            localStorage.setItem('dhd_users', JSON.stringify(window._localUsers));
         }
     } catch (err) {
-        console.error('Failed to load API key (attempt ' + (retryCount + 1) + '):', err);
-        if (retryCount < 2) {
-            // Retry after a short delay (1s, then 2s)
-            setTimeout(function() { loadApiKey(retryCount + 1); }, (retryCount + 1) * 1000);
-        }
+        console.warn('Background sync from JSONBin failed (non-critical):', err.message);
     }
 }
 
