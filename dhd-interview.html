@@ -1695,7 +1695,7 @@ function disableInput(disabled) {
         document.getElementById('voice-transcript').textContent = 'Listening... (speak anytime)';
         try { recognition.start(); } catch(e) {}
     }
-    // If speaker is on, speakText.onend will restart listening
+    // If speaker is on, speakText handles restarting listening after final sentence
 }
 
 // ============================================================
@@ -1849,62 +1849,67 @@ function findBestVoice() {
     const voices = window.speechSynthesis.getVoices();
     if (!voices.length) return null;
 
-    // Priority list: most natural-sounding voices on Mac/Chrome
+    // Priority: Samantha is default on all Macs — universal and best quality built-in voice
+    // Then fall back through other decent options
     const preferredNames = [
-        'Evan', 'Zoe', 'Karen', 'Daniel', 'Samantha',  // macOS premium voices
-        'Google UK English Male', 'Google UK English Female',  // Chrome
-        'Google US English',  // Chrome fallback
-        'Alex', 'Fiona', 'Moira'  // macOS fallbacks
+        'Samantha',           // macOS default — available on ALL Macs
+        'Karen',              // macOS Australian — warm tone
+        'Daniel',             // macOS British — clear, pleasant
+        'Moira',              // macOS Irish — warm
+        'Tessa',              // macOS South African — friendly
+        'Google UK English Female',  // Chrome on non-Mac
+        'Google US English',         // Chrome fallback
     ];
 
     for (const name of preferredNames) {
-        const match = voices.find(v => v.name.includes(name) && v.lang.startsWith('en'));
+        const match = voices.find(v => v.name === name || (v.name.includes(name) && v.lang.startsWith('en')));
         if (match) return match;
     }
 
-    // Fallback: any English voice that's not "compact" or "enhanced" low quality
-    return voices.find(v => v.lang.startsWith('en') && !v.name.includes('compact')) ||
-           voices.find(v => v.lang.startsWith('en')) || null;
+    // Last resort: any English voice
+    return voices.find(v => v.lang.startsWith('en')) || null;
 }
 
 function speakText(text) {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
 
-    // Break long text into sentences for more natural delivery
-    const utterance = new SpeechSynthesisUtterance(text);
+    // Split into sentences for more natural pacing and to avoid Chrome's long-utterance bug
+    const sentences = text.match(/[^.!?]+[.!?]+[\s]*/g) || [text];
+    const queue = sentences.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
 
     if (!bestVoice) bestVoice = findBestVoice();
-    if (bestVoice) utterance.voice = bestVoice;
 
-    utterance.rate = 1.15;   // Slightly faster than default for natural pace
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    // Chrome has a bug where long utterances stop — keep alive with resume
-    let keepAlive;
-    utterance.onstart = () => {
-        keepAlive = setInterval(() => {
-            if (window.speechSynthesis.speaking) {
-                window.speechSynthesis.pause();
-                window.speechSynthesis.resume();
-            } else {
-                clearInterval(keepAlive);
+    function speakNext(index) {
+        if (index >= queue.length) {
+            // All sentences done — restart listening if in voice mode
+            if (voiceMode && !isSending && recognition) {
+                recognition._resetFinal();
+                document.getElementById('voice-transcript').textContent = 'Listening... (speak anytime)';
+                try { recognition.start(); } catch(e) {}
             }
-        }, 10000);
-    };
-    utterance.onend = () => {
-        clearInterval(keepAlive);
-        // Auto-resume listening after Claude finishes speaking
-        if (voiceMode && !isSending && recognition) {
-            recognition._resetFinal();
-            document.getElementById('voice-transcript').textContent = 'Listening... (speak anytime)';
-            try { recognition.start(); } catch(e) {}
+            return;
         }
-    };
 
-    window.speechSynthesis.speak(utterance);
+        const utterance = new SpeechSynthesisUtterance(queue[index]);
+        if (bestVoice) utterance.voice = bestVoice;
+
+        // Tuned for warm, conversational Samantha
+        utterance.rate = 0.95;    // Slightly slower — more natural, less rushed
+        utterance.pitch = 1.05;   // Tiny pitch lift — warmer tone
+        utterance.volume = 1.0;
+
+        utterance.onend = function() { speakNext(index + 1); };
+        utterance.onerror = function() { speakNext(index + 1); };
+
+        window.speechSynthesis.speak(utterance);
+    }
+
+    speakNext(0);
+    return; // skip old utterance code below
 }
+
+// (Legacy speakText code removed — sentence-by-sentence approach above handles everything)
 
 // Load voices (they load async in some browsers)
 if (window.speechSynthesis) {
